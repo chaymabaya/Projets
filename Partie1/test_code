@@ -1,0 +1,352 @@
+# train.py
+import os
+import json
+import joblib
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+# -----------------------------
+# Config
+# -----------------------------
+RAW_CSV = "part1_pricing_gradient_descent_dirty.csv"
+CLEAN_CSV = "cleaned_data.csv"
+SCALED_CSV = "scaled_data.csv"
+MODEL_DIR = "artifacts"
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+FEATURE_COLUMNS = [
+    "demand_index", "time_slot", "day_of_week", "competition_pressure",
+    "operational_cost", "seasonality_index", "marketing_intensity"
+]
+TARGET_COLUMN = "dynamic_price"
+
+RANDOM_STATE = 42
+
+# -----------------------------
+# Load & Inspect
+# -----------------------------
+df = pd.read_csv(RAW_CSV)
+
+# Optional quick checks
+# print(df.describe())
+# print(df.shape)
+# print(df.isnull().sum())
+
+# -----------------------------
+# Cleaning
+# -----------------------------
+# Clip discrete ranges
+df["time_slot"] = df["time_slot"].clip(lower=0, upper=23)
+df["day_of_week"] = df["day_of_week"].clip(lower=0, upper=6)
+
+# Replace negatives with NA for non-negative columns
+cols_replace_negatives = ["demand_index", "operational_cost", "marketing_intensity", "competition_pressure"]
+df[cols_replace_negatives] = df[cols_replace_negatives].where(df[cols_replace_negatives] >= 0, pd.NA)
+
+# Drop rows missing target
+df.dropna(subset=[TARGET_COLUMN], inplace=True)
+
+# Impute: mean for some, median for others
+mean_data = ["operational_cost", "seasonality_index"]
+median_data = ["demand_index", "time_slot", "day_of_week", "competition_pressure", "marketing_intensity"]
+
+for col in mean_data:
+    df[col] = df[col].fillna(df[col].mean())
+
+for col in median_data:
+    df[col] = df[col].fillna(df[col].median())
+
+df.to_csv(CLEAN_CSV, index=False)
+
+# -----------------------------
+# Split & Scale
+# -----------------------------
+X = df[FEATURE_COLUMNS].copy()
+y = df[TARGET_COLUMN].copy()
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=RANDOM_STATE
+)
+
+scaler = MinMaxScaler(feature_range=(0, 1))
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+pd.DataFrame(X_train_scaled, columns=FEATURE_COLUMNS).to_csv(SCALED_CSV, index=False)
+
+# -----------------------------
+# Gradient Descent Implementations
+# -----------------------------
+def add_intercept(X):
+    """Add intercept column of ones."""
+    return np.c_[np.ones(X.shape[0]), X]
+
+def batch_gradient_descent(X, y, lr=0.01, iterations=2000, tol=None, verbose=False):
+    """
+    Batch GD: updates using full dataset per step.
+    Returns theta, errors list.
+    """
+    Xb = add_intercept(X)
+    m, n = Xb.shape
+    theta = np.zeros(n)
+    errors = []
+
+    for i in range(iterations):
+        y_pred = Xb.dot(theta)
+        error = y_pred - y
+        gradient = (2/m) * Xb.T.dot(error)
+        theta -= lr * gradient
+
+        mse = np.mean(error**2)
+        errors.append(mse)
+
+        if verbose and i % 200 == 0:
+            print(f"[Batch] Iter {i} - MSE: {mse:.6f}")
+
+        if tol is not None and mse < tol:
+            break
+
+    return theta, errors
+
+def stochastic_gradient_descent(X, y, lr=0.01, iterations=50, shuffle=True, verbose=False):
+    """
+    SGD: updates per single sample. iterations = epochs.
+    Returns theta, errors per epoch.
+    """
+    Xb = add_intercept(X)
+    m, n = Xb.shape
+    theta = np.zeros(n)
+    errors = []
+
+    for epoch in range(iterations):
+        if shuffle:
+            idx = np.random.permutation(m)
+            Xb_epoch = Xb[idx]
+            y_epoch = y[idx]
+        else:
+            Xb_epoch = Xb
+            y_epoch = y
+
+        for i in range(m):
+            x_i = Xb_epoch[i:i+1]        # shape (1, n)
+            y_i = y_epoch[i:i+1]         # shape (1,)
+            y_pred_i = x_i.dot(theta)    # shape (1,)
+            gradient = 2 * x_i.T.dot(y_pred_i - y_i)  # shape (n, 1)
+            theta -= lr * gradient.ravel()
+
+        # Epoch MSE on full train set
+        y_pred = Xb.dot(theta)
+        mse = mean_squared_error(y, y_pred)
+        errors.append(mse)
+
+        if verbose and epoch % 5 == 0:
+            print(f"[SGD] Epoch {epoch} - MSE: {mse:.6f}")
+
+    return theta, errors
+
+def mini_batch_gradient_descent(X, y, lr=0.01, batch_size=32, iterations=200, shuffle=True, verbose=False):
+    """
+    Mini-batch GD: updates using small batches.
+    iterations = epochs over all batches.
+    Returns theta, errors per epoch.
+    """
+    Xb = add_intercept(X)
+    m, n = Xb.shape
+    theta = np.zeros(n)
+    errors = []
+
+    for epoch in range(iterations):
+        if shuffle:
+            idx = np.random.permutation(m)
+            Xb_epoch = Xb[idx]
+            y_epoch = y[idx]
+        else:
+            Xb_epoch = Xb
+            y_epoch = y
+
+        for start in range(0, m, batch_size):
+            end = start + batch_size
+            xb = Xb_epoch[start:end]
+            yb = y_epoch[start:end]
+            if xb.shape[0] == 0:
+                continue
+
+            y_pred_b = xb.dot(theta)
+            error_b = y_pred_b - yb
+            gradient = (2 / xb.shape[0]) * xb.T.dot(error_b)
+            theta -= lr * gradient
+
+        # Epoch MSE on full train set
+        y_pred = Xb.dot(theta)
+        mse = mean_squared_error(y, y_pred)
+        errors.append(mse)
+
+        if verbose and epoch % 10 == 0:
+            print(f"[Mini-batch] Epoch {epoch} - MSE: {mse:.6f}")
+
+    return theta, errors
+
+# -----------------------------
+# Train models with multiple learning rates
+# -----------------------------
+LRS = [0.001, 0.005, 0.01, 0.05]
+BATCH_CONFIG = dict(iterations=4000, tol=None, verbose=True)
+SGD_CONFIG = dict(iterations=60, verbose=True)           # epochs
+MINI_CONFIG = dict(iterations=300, batch_size=32, verbose=True)
+
+results = []
+
+for lr in LRS:
+    theta_b, err_b = batch_gradient_descent(X_train_scaled, y_train.values, lr=lr, **BATCH_CONFIG)
+    y_pred_b_test = add_intercept(X_test_scaled).dot(theta_b)
+    mse_b = mean_squared_error(y_test, y_pred_b_test)
+    mae_b = mean_absolute_error(y_test, y_pred_b_test)
+    r2_b = r2_score(y_test, y_pred_b_test)
+    results.append({
+        "method": "batch",
+        "lr": lr,
+        "theta": theta_b.tolist(),
+        "train_errors": err_b,
+        "test_mse": mse_b,
+        "test_mae": mae_b,
+        "test_r2": r2_b
+    })
+
+for lr in LRS:
+    theta_s, err_s = stochastic_gradient_descent(X_train_scaled, y_train.values, lr=lr, **SGD_CONFIG)
+    y_pred_s_test = add_intercept(X_test_scaled).dot(theta_s)
+    mse_s = mean_squared_error(y_test, y_pred_s_test)
+    mae_s = mean_absolute_error(y_test, y_pred_s_test)
+    r2_s = r2_score(y_test, y_pred_s_test)
+    results.append({
+        "method": "sgd",
+        "lr": lr,
+        "theta": theta_s.tolist(),
+        "train_errors": err_s,
+        "test_mse": mse_s,
+        "test_mae": mae_s,
+        "test_r2": r2_s
+    })
+
+for lr in LRS:
+    theta_m, err_m = mini_batch_gradient_descent(X_train_scaled, y_train.values, lr=lr, **MINI_CONFIG)
+    y_pred_m_test = add_intercept(X_test_scaled).dot(theta_m)
+    mse_m = mean_squared_error(y_test, y_pred_m_test)
+    mae_m = mean_absolute_error(y_test, y_pred_m_test)
+    r2_m = r2_score(y_test, y_pred_m_test)
+    results.append({
+        "method": "mini_batch",
+        "lr": lr,
+        "theta": theta_m.tolist(),
+        "train_errors": err_m,
+        "test_mse": mse_m,
+        "test_mae": mae_m,
+        "test_r2": r2_m
+    })
+
+# -----------------------------
+# Pick the best model by test MSE
+# -----------------------------
+best = min(results, key=lambda r: r["test_mse"])
+print("\nBest model:")
+print(json.dumps({
+    "method": best["method"],
+    "lr": best["lr"],
+    "test_mse": best["test_mse"],
+    "test_mae": best["test_mae"],
+    "test_r2": best["test_r2"]
+}, indent=2))
+
+# -----------------------------
+# Save artifacts: theta, scaler, metadata
+# -----------------------------
+theta_best = np.array(best["theta"])
+joblib.dump(theta_best, os.path.join(MODEL_DIR, "model_theta.pkl"))
+joblib.dump(scaler, os.path.join(MODEL_DIR, "scaler.pkl"))
+
+metadata = {
+    "feature_columns": FEATURE_COLUMNS,
+    "target_column": TARGET_COLUMN,
+    "method": best["method"],
+    "learning_rate": best["lr"],
+    "test_mse": best["test_mse"],
+    "test_mae": best["test_mae"],
+    "test_r2": best["test_r2"],
+}
+with open(os.path.join(MODEL_DIR, "metadata.json"), "w") as f:
+    json.dump(metadata, f, indent=2)
+
+print(f"\nSaved artifacts to '{MODEL_DIR}'.")
+
+# -----------------------------
+# Convergence plots
+# -----------------------------
+plt.figure(figsize=(12, 8))
+for r in results:
+    label = f"{r['method']} (lr={r['lr']})"
+    plt.plot(r["train_errors"], label=label)
+plt.xlabel("Iterations/Epochs")
+plt.ylabel("Train MSE")
+plt.title("Convergence curves for Batch, SGD, and Mini-batch GD")
+plt.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(MODEL_DIR, "convergence_curves.png"))
+plt.close()
+
+# -----------------------------
+# Learning rate impact plot
+# -----------------------------
+# Aggregate best per method by lr
+methods = ["batch", "sgd", "mini_batch"]
+plt.figure(figsize=(10, 6))
+for method in methods:
+    xs, ys = [], []
+    for lr in LRS:
+        m = [r for r in results if r["method"] == method and r["lr"] == lr][0]
+        xs.append(lr)
+        ys.append(m["test_mse"])
+    plt.plot(xs, ys, marker="o", label=method)
+
+plt.xscale("log")
+plt.xlabel("Learning rate (log scale)")
+plt.ylabel("Test MSE")
+plt.title("Impact of learning rate on generalization (Test MSE)")
+plt.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(MODEL_DIR, "lr_impact.png"))
+plt.close()
+
+# -----------------------------
+# Prediction stability analysis
+# -----------------------------
+def stability_test(theta, scaler, X_sample, noise_scale=0.02, trials=200):
+    """
+    Adds small random noise to inputs and measures output variance.
+    Returns std of predictions.
+    """
+    X_sample = np.array(X_sample).reshape(1, -1)
+    preds = []
+    for _ in range(trials):
+        noise = np.random.normal(loc=0.0, scale=noise_scale, size=X_sample.shape)
+        X_noisy = X_sample + noise
+        X_scaled = scaler.transform(X_noisy)
+        y_pred = add_intercept(X_scaled).dot(theta)
+        preds.append(float(y_pred[0]))
+    return np.std(preds), np.mean(preds)
+
+# Pick median sample of X_test to assess stability
+median_idx = np.argsort(y_test.values)[len(y_test)//2]
+X_sample = X_test.iloc[median_idx][FEATURE_COLUMNS].values
+std_pred, mean_pred = stability_test(theta_best, scaler, X_sample, noise_scale=0.02, trials=300)
+print(f"\nPrediction stability (std over noisy inputs): {std_pred:.6f}, mean prediction: {mean_pred:.6f}")
+
+with open(os.path.join(MODEL_DIR, "stability.json"), "w") as f:
+    json.dump({"std_pred": std_pred, "mean_pred": mean_pred}, f, indent=2)
+
+print("Generated plots and stability metrics.")

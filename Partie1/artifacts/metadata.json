@@ -1,0 +1,17 @@
+{
+  "feature_columns": [
+    "demand_index",
+    "time_slot",
+    "day_of_week",
+    "competition_pressure",
+    "operational_cost",
+    "seasonality_index",
+    "marketing_intensity"
+  ],
+  "target_column": "dynamic_price",
+  "method": "mini_batch",
+  "learning_rate": 0.05,
+  "test_mse": 17149.145403699742,
+  "test_mae": 65.2144500972153,
+  "test_r2": 0.2976593737383989
+}
