@@ -58,8 +58,6 @@ y_pred = clf.predict(X_test)
 accuracy_score(y_test, y_pred)
 
 # from sklearn.model_selection import GridSearchCV
-
-
 # param_grid = {
 #     "criterion": ["gini", "entropy"],
 #     "max_depth": [3, 5, 8, 10, None],
@@ -67,7 +65,6 @@ accuracy_score(y_test, y_pred)
 #     "min_samples_leaf": [1, 2, 5],
 #     "class_weight": [None, "balanced"]
 # }
-
 # grid = GridSearchCV(
 #     DecisionTreeClassifier(random_state=42),
 #     param_grid,
@@ -75,18 +72,15 @@ accuracy_score(y_test, y_pred)
 #     scoring="f1_weighted",   # meilleur que accuracy si déséquilibre
 #     n_jobs=-1
 # )
-
 # grid.fit(X_train, y_train)
 # best_model = grid.best_estimator_
-
 # y_pred = best_model.predict(X_test)
 # print("Accuracy :", accuracy_score(y_test, y_pred))
-
 # accuracy_score(y_test, y_pred)
-
-
-
 # print(classification_report(y_test, y_pred))
+
+
+
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt 
